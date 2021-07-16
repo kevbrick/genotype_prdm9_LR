@@ -1,0 +1,190 @@
+#!/bin/bash 
+usage()
+{
+    echo "usage: genotypePRDM9 -f <<fasta file>> -n <<name>> [-v] [-h]"
+		echo "-------------------------------------------------------------------"
+		echo "Genotype PRDM9 from long sequencing reads"
+		echo "(See Alleva et al. 2021)"
+		echo "-------------------------------------------------------------------"
+		echo "-f/--fa      : FASTA file containing long reads from "
+		echo "               the PRDM9 ZF-Array (Required)"
+		echo ""
+		echo "-n/--name    : Sample name (Required)"
+		echo ""
+		echo "-a/--alleles : File of PRDM9 alleles"
+		echo "               All PRDM9 alleles used in Alleva et al. 2021 are"
+		echo "               queried by default. This option is useful if you "
+		echo "               wish to include new alleles. File format must be as "
+		echo "               found in File S3 of Alleva et al. 2021 "
+		echo ""
+		echo "-z/--zfs     : File of PRDM9 ZFs"
+		echo "               All PRDM9 ZFs used in Alleva et al. 2021 are"
+		echo "               queried by default. This option is useful if you "
+		echo "               wish to include new ZFs. File format must be as "
+		echo "               found in File S2 of Alleva et al. 2021 "
+		echo ""
+		echo "-t           : Run internal test "
+		echo ""
+		echo "-v           : verbose output files "
+		echo ""
+		echo "-h           : show this help "
+		echo "-------------------------------------------------------------------"
+		echo "Outputs:"
+		echo "PRDM9 haplotypes table      : <<name>>.PRDM9alleles.text"
+		echo "                              One line per allele"
+		echo ""
+		echo "ZF arrays from long reads   : <<name>>.PrZFA.##ZFs.fa"
+		echo "                              One file for each size ZF-array "		
+		echo "-------------------------------------------------------------------"
+}
+
+## PARSE ARGS
+while [ "$1" != "" ]; do
+    case $1 in
+        -f | --fa | --fasta )           shift
+                                fasta="$1"
+                                ;;
+				-n | --name )           shift
+                                name="$1"
+                                ;;
+				-a | --alleles )        shift
+                                allele_file="$1"
+                                ;;
+				-z | --zfs )            shift
+                                zfs_file="$1"
+                                ;;
+				-t | --test )       test=1
+                                ;;
+        -v | --verbose )    verbose=1
+                                ;;
+        -h | --help )           usage
+                                exit
+                                ;;
+        * )                     usage
+                                exit 1
+    esac
+    shift
+done
+
+pubZFs='/usr/local/genotypePRDM9/Alleva_et_al_2021_File_S2_PRDM9_ZF_details.txt'
+pubAlleles='/usr/local/genotypePRDM9/Alleva_et_al_2021_File_S3_PRDM9_allele_details.txt'
+
+if [ ! -z $test ]; then
+  usage
+	echo ""
+	echo "****** RUNNING INTERNAL TEST **************************************"
+	echo "Ignoring other arguments and using 100 reads from an A/A individual"
+	echo "-------------------------------------------------------------------"
+	echo "All is OK if you have the following output files:"
+	echo "prdm9_test_AA.13ZFs.fa"
+	echo "prdm9_test_AA.haplotypes.txt"
+	echo "-------------------------------------------------------------------"
+  echo ""
+	
+	fasta='/usr/local/genotypePRDM9/prdm9_test_AA.longreads.fa'
+	name="prdm9_test_AA"
+	
+else
+	if [ -z $name ]; then
+		usage
+		echo "**** ARGUMENT ERROR ****"
+	  echo "Sample name required: -n/--name <<name>>"
+		echo ""
+	  exit
+	fi
+
+	if [ -z $fasta ]; then
+	  usage
+		echo "**** ARGUMENT ERROR ****"
+		echo "FASTA file of long reads required: -f/--fa <<fasta file>>"
+		echo ""
+	  exit 1
+	fi
+
+	if [ ! -f $fasta ]; then
+	  usage
+		echo "**** ARGUMENT ERROR ****"
+		echo "FASTA file does not exist ($fasta)"
+		echo ""
+	  exit 1
+	fi
+	
+	if [ ! -z $zfs_file ]; then
+	  if [ ! -f $zfs_file ]; then
+			echo "**** ARGUMENT ERROR ****"
+			echo "ZFs file does not exist ($zfs_file)"
+			echo ""
+	  	exit 1
+		else
+			pubZFs=$zfs_file
+		fi
+	fi
+
+	if [ ! -z $alleles_file ]; then
+	  if [ ! -f $alleles_file ]; then
+			echo "**** ARGUMENT ERROR ****"
+			echo "Alleles file does not exist ($alleles_file)"
+			echo ""
+	  	exit 1
+		else
+			pubAlleles=$alleles_file
+		fi
+	fi
+fi
+
+img='docker://kevbrick/genotypeprdm9lr:2.1'
+
+current_dir=`pwd`
+
+if [ -z "$TMPDIR" ]
+then
+	export TMPDIR=$current_dir
+fi
+
+export TMPDIR=$TMPDIR"/genotypePRDM9_"$RANDOM$RANDOM$RANDOM
+
+mkdir $TMPDIR
+
+### EXTRACT ZF ARRAYS FROM READS
+echo "Extracting intact ZF arrays from long read fasta ..."
+
+cmd_extractZFs="perl extractPRDM9ZFsFromFA.pl --fa $fasta --id $name --ZFs $pubZFs --tmp $TMPDIR"
+singularity --silent exec -B $TMPDIR ${img} $cmd_extractZFs || exit 1
+
+### GET CONSENSUS GENOTYPES
+num_fas=`ls $TMPDIR/$name.*ZFs.fa | wc -l`
+
+echo "Inferring genotypes ..."
+if [ $num_fas -eq 1 ]; then
+	fa=`ls $TMPDIR/$name.*ZFs.fa`
+	cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --onehap --id $name --pz $pubZFs --pa $pubAlleles --tmp $TMPDIR"
+	singularity --silent exec -B $TMPDIR ${img} $cmd_genotype || exit 1
+else
+	for fa in `ls $TMPDIR/$name.*ZFs.fa`; do
+		cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --id $name --pz $pubZFs --pa $pubAlleles --tmp $TMPDIR"
+		singularity --silent exec -B $TMPDIR ${img} $cmd_genotype || exit 1
+	done
+fi
+
+echo -e "sample\tallele\tzf_code\tzf_count\tsequence" >$name.PRDM9_alleles.txt
+cat $TMPDIR/$name.*haplotypes.txt >>$name.PRDM9_alleles.txt
+
+cp $TMPDIR/$name.*ZFs.fa .
+
+if [ ! -z $verbose ]; then
+	cp $TMPDIR/$name*PrZFA.details.txt ./$name.ZFarray_calling_details.txt
+	cp $TMPDIR/$name*stats.txt .
+fi
+
+if [ ! -z $test ]; then
+	test1=`echo "6be3ac4f5f40f77a3cda3f3878f63be8  prdm9_test_AA.PRDM9_alleles.txt" |md5sum -c`
+
+	if [ "$test1" == "prdm9_test_AA.PRDM9_alleles.txt: OK" ]; then 
+		echo "Test : OK"
+	else
+		echo "Test failed : ERROR - check outputs"
+		echo "If outputs look OK, it may just be a checksum error ..."
+	fi
+fi
+
+rm -rf $TMPDIR
