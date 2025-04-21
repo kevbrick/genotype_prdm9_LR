@@ -23,6 +23,15 @@ usage()
 		echo "               wish to include new ZFs. File format must be as "
 		echo "               found in File S2 of Alleva et al. 2021 "
 		echo ""
+		echo "-d/--docker  : Use Docker instead of Singularity"
+		echo ""
+		echo "-m/--min-seqs: Minimum number of sequences required (default: 30)"
+		echo "               This is the minimum number of ZF arrays required"
+		echo "               to infer a genotype. If the number of ZF arrays"
+		echo "               is less than this number, the program will exit."
+		echo "               The accuracy of genotyping with fewer than 30"
+		echo "               ZF arrays has not been tested."
+		echo ""
 		echo "-t           : Run internal test "
 		echo ""
 		echo "-v           : verbose output files "
@@ -39,35 +48,25 @@ usage()
 }
 
 ## PARSE ARGS
+minimum_seqs=30
 while [ "$1" != "" ]; do
     case $1 in
-        -f | --fa | --fasta )           shift
-                                fasta="$1"
-                                ;;
-				-n | --name )           shift
-                                name="$1"
-                                ;;
-				-a | --alleles )        shift
-                                allele_file="$1"
-                                ;;
-				-z | --zfs )            shift
-                                zfs_file="$1"
-                                ;;
-				-t | --test )       test=1
-                                ;;
-        -v | --verbose )    verbose=1
-                                ;;
-        -h | --help )           usage
-                                exit
-                                ;;
-        * )                     usage
-                                exit 1
+        -f|--fa|--fasta)    shift; fasta="$1" ;;
+        -n|--name)          shift; name="$1" ;;
+        -a|--alleles)       shift; allele_file="$1" ;;
+        -z|--zfs)           shift; zfs_file="$1" ;;
+        -t|--test)          test=1 ;;
+        -v|--verbose)       verbose=1 ;;
+        -d|--docker)        use_docker=1 ;;
+        -m|--min-seqs)      shift; minimum_seqs="$1" ;;
+        -h|--help)          usage; exit ;;
+        *)                  usage; exit 1 ;;
     esac
     shift
 done
 
-pubZFs='/usr/local/genotypePRDM9/Alleva_et_al_2021_File_S2_PRDM9_ZF_details.txt'
-pubAlleles='/usr/local/genotypePRDM9/Alleva_et_al_2021_File_S3_PRDM9_allele_details.txt'
+pubZFs='Alleva_et_al_2021_File_S2_PRDM9_ZF_details.txt'
+pubAlleles='Alleva_et_al_2021_File_S3_PRDM9_allele_details.txt'
 
 if [ ! -z $test ]; then
   usage
@@ -81,7 +80,7 @@ if [ ! -z $test ]; then
 	echo "-------------------------------------------------------------------"
   echo ""
 	
-	fasta='/usr/local/genotypePRDM9/prdm9_test_AA.longreads.fa'
+	fasta='prdm9_test_AA.longreads.fa'
 	name="prdm9_test_AA"
 	
 else
@@ -132,7 +131,8 @@ else
 	fi
 fi
 
-img='docker://kevbrick/genotypeprdm9lr:2.1'
+docker_img='kevbrick/genotypeprdm9lr:2.1'
+img='docker://'$docker_img
 
 current_dir=`pwd`
 
@@ -143,26 +143,69 @@ fi
 
 export TMPDIR=$TMPDIR"/genotypePRDM9_"$RANDOM$RANDOM$RANDOM
 
+echo "TMPDIR: $TMPDIR"
 mkdir $TMPDIR
+if [ ! -z $use_docker ]; then
+	fasta_input="/temp/"`basename $fasta`
+	pubZFs_input="/temp/"`basename $pubZFs`
+	pubAlleles_input="/temp/"`basename $pubAlleles`
+
+	cp $fasta $TMPDIR/`basename $fasta`
+	cp $pubZFs $TMPDIR/`basename $pubZFs`
+	cp $pubAlleles $TMPDIR/`basename $pubAlleles`
+
+	echo "fasta_input: $fasta_input"
+	echo "pubZFs_input: $pubZFs_input"
+	echo "pubAlleles_input: $pubAlleles_input"
+
+	exec_temp_dir="/temp"
+else
+	fasta_input=$fasta
+	pubZFs_input=$pubZFs
+	pubAlleles_input=$pubAlleles
+	exec_temp_dir="/temp"
+fi
 
 ### EXTRACT ZF ARRAYS FROM READS
 echo "Extracting intact ZF arrays from long read fasta ..."
+cmd_extractZFs="perl extractPRDM9ZFsFromFA.pl --fa $fasta_input --id $name --ZFs $pubZFs_input --n $minimum_seqs --tmp $exec_temp_dir"
 
-cmd_extractZFs="perl extractPRDM9ZFsFromFA.pl --fa $fasta --id $name --ZFs $pubZFs --tmp $TMPDIR"
-singularity --silent exec -B $TMPDIR ${img} $cmd_extractZFs || exit 1
+if [ ! -z $use_docker ]; then
+	echo 'docker run --rm -v "'$PWD'":/data -w /data -v "'$TMPDIR'":/temp kevbrick/genotypeprdm9lr:2.1 '$cmd_extractZFs' || exit 1'
+	docker run --rm -v "$PWD":/data -w /data -v "$TMPDIR":/temp kevbrick/genotypeprdm9lr:2.1 $cmd_extractZFs || exit 1
+else
+	echo "singularity exec -B $TMPDIR ${img} $cmd_extractZFs || exit 1"
+	singularity --silent exec -B $TMPDIR ${img} $cmd_extractZFs || exit 1
+fi
 
 ### GET CONSENSUS GENOTYPES
 num_fas=`ls $TMPDIR/$name.*ZFs.fa | wc -l`
 
 echo "Inferring genotypes ..."
 if [ $num_fas -eq 1 ]; then
-	fa=`ls $TMPDIR/$name.*ZFs.fa`
-	cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --onehap --id $name --pz $pubZFs --pa $pubAlleles --tmp $TMPDIR"
-	singularity --silent exec -B $TMPDIR ${img} $cmd_genotype || exit 1
+	if [ ! -z $use_docker ]; then
+		fa=`ls $TMPDIR/$name.*ZFs.fa | sed "s|$TMPDIR|/temp|g"`
+		cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --onehap --id $name --pz $pubZFs --pa $pubAlleles --tmp  $exec_temp_dir"
+		echo 'docker run  --rm -v "'$PWD'":/data -w /data -v "'$TMPDIR'":/temp kevbrick/genotypeprdm9lr:2.1 '$cmd_genotype' || exit 1'
+		docker run  --rm -v "$PWD":/data -w /data -v "$TMPDIR":/temp kevbrick/genotypeprdm9lr:2.1 $cmd_genotype || exit 1
+	else
+		fa=`ls $TMPDIR/$name.*ZFs.fa`
+		cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --onehap --id $name --pz $pubZFs --pa $pubAlleles --tmp $exec_temp_dir"
+		echo "singularity exec -B $TMPDIR ${img} $cmd_genotype || exit 1"
+		singularity --silent exec -B $TMPDIR ${img} $cmd_genotype || exit 1
+	fi
 else
 	for fa in `ls $TMPDIR/$name.*ZFs.fa`; do
-		cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --id $name --pz $pubZFs --pa $pubAlleles --tmp $TMPDIR"
-		singularity --silent exec -B $TMPDIR ${img} $cmd_genotype || exit 1
+		if [ ! -z $use_docker ]; then
+			fa=`echo $fa | sed "s|$TMPDIR|/temp|g"`
+			cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --id $name --pz $pubZFs --pa $pubAlleles --tmp $exec_temp_dir"
+			echo 'docker run --rm -v "'$PWD'":/data -w /data -v "'$TMPDIR'":/temp kevbrick/genotypeprdm9lr:2.1 '$cmd_genotype' || exit 1'
+			docker run --rm -v "$PWD":/data -w /data -v "$TMPDIR":/temp kevbrick/genotypeprdm9lr:2.1 $cmd_genotype || exit 1
+		else
+			cmd_genotype="perl getZFAhaplotypesFromFA.pl --fa $fa --id $name --pz $pubZFs --pa $pubAlleles --tmp $exec_temp_dir"
+			echo "singularity exec -B $TMPDIR ${img} $cmd_genotype || exit 1"
+			singularity --silent exec -B $TMPDIR ${img} $cmd_genotype || exit 1
+		fi
 	done
 fi
 
@@ -187,4 +230,4 @@ if [ ! -z $test ]; then
 	fi
 fi
 
-rm -rf $TMPDIR
+#rm -rf $TMPDIR

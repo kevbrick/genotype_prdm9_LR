@@ -13,17 +13,17 @@ use List::Util qw(max);
 
 use Getopt::Long;
 
-GetOptions ('fa=s'     => \(my $seq_input_fa),
-            'id=s'     => \(my $sample_id),
-            'tmp=s'    => \(my $tmpdir),
-            'type=s'   => \(my $type),
-            'n=i'      => \(my $n_seqs_required = 30),
-            'ulim=i'   => \(my $upper_limit = 2000),
-            'aln=s'    => \(my $aligner = 'blast'),
-            'ZFs=s'    => \(my $known_ZFs = '/usr/local/genotypePRDM9/Alleva_et_al_2021_File_S2_PRDM9_ZF_details.txt'),
-            'se+'      => \(my $detsToStdErr),
-						'so+'			 => \(my $simple_outputs),
-						'v+'       => \(my $verbose));
+GetOptions ('fa=s'   => \(my $seq_input_fa),
+            'id=s'   => \(my $sample_id),
+            'tmp=s'  => \(my $tmpdir),
+            'type=s' => \(my $type),
+            'n=i'    => \(my $n_seqs_required = 30),
+            'ulim=i' => \(my $upper_limit = 2000),
+            'aln=s'  => \(my $aligner = 'blast'),
+            'ZFs=s'  => \(my $known_ZFs = '/usr/local/genotypePRDM9/Alleva_et_al_2021_File_S2_PRDM9_ZF_details.txt'),
+            'se+'    => \(my $detsToStdErr),
+            'so+'    => \(my $simple_outputs),
+            'v+'     => \(my $verbose));
 
 unless ($tmpdir){
 	if ($ENV{'SLURM_JOBID'} && -e '/lscratch/'.$ENV{'SLURM_JOBID'}){
@@ -33,10 +33,22 @@ unless ($tmpdir){
 	}
 }
 
-die("FASTA ($seq_input_fa) does not exist                             !")                  unless (-e $seq_input_fa);
-die("Known ZFs file ($known_ZFs) does not exist                       !")                  unless (-e $known_ZFs);
-die("Sample name required (--id)!")                                                        unless ($sample_id);
-die("Temp folder not found (specify \$TMPDIR or --tmp)")                                   unless ($tmpdir);
+die("FASTA ($seq_input_fa) does not exist                             !") unless (-e $seq_input_fa);
+die("Known ZFs file ($known_ZFs) does not exist                       !") unless (-e $known_ZFs);
+die("Sample name required (--id)!")                                       unless ($sample_id);
+die("Temp folder not found (specify \$TMPDIR or --tmp)")                  unless ($tmpdir);
+
+#count sequences in fasta
+my $seq_count = 0;
+open(my $fh, '<', $seq_input_fa) or die "Cannot open $seq_input_fa: $!";
+while(<$fh>) {
+    $seq_count++ if /^>/;
+}
+close($fh);
+
+if ($seq_count < $n_seqs_required){
+  die("**ERROR** - FASTA INPUT FILE - $n_seqs_required sequences required for ZF inference, but only $seq_count found in $seq_input_fa\n");
+}
 
 ## Make random name stem
 my $rand_temp_id = int(rand()*100000000000);
@@ -76,6 +88,8 @@ my ($totSeqs, $noZFSeqs, $goodSeqs, $fasta_seq_count);
 my (%zf_array_count_by_size, $zf_array_count_total, %two_alleles);
 my (%zf_array_sizes_to_use, %zf_aln, $zf_array_sizes_known);
 
+my $alignment_output_count = 0;
+
 ## This loop will find the ZFs in each sequence, check that the flanks are found, and build a
 ## diploid consensus sequence for each. We loop over each sequence in the fasta
 while ( my $obj_seq = $obj_fa->next_seq ) {
@@ -94,7 +108,7 @@ while ( my $obj_seq = $obj_fa->next_seq ) {
 	## complete zf array and return details of the array
 	my ($number_of_zfs, $low_scoring_ZF, $seq_of_entire_zf_array, @zfs) = get_ZF_array($seq2use, $obj_seq->id);
 
-  ## if we have no ZFs, then skip
+    ## if we have no ZFs, then skip
 	next unless ($number_of_zfs);
 
 	## We're going to loop through the ZFs, so set counter to zero
@@ -102,12 +116,13 @@ while ( my $obj_seq = $obj_fa->next_seq ) {
 
 	## This keeps track of the number of zf arrays by size
 	$zf_array_count_by_size{$number_of_zfs}++;
-  print OUTDETS "ZF COUNT: $number_of_zfs\n" if ($verbose_outputs);
+    print OUTDETS "ZF COUNT: $number_of_zfs\n" if ($verbose_outputs);
 
-  $zf_array_count_total++;
-	$goodSeqs++;
+    $zf_array_count_total++;
+    $goodSeqs++;
+  
 
-  for my $n (sort {$a <=> $b} keys(%zf_array_count_by_size)){
+    for my $n (sort {$a <=> $b} keys(%zf_array_count_by_size)){
 		print READ2ZFASTAT join("\t",$totSeqs,$goodSeqs,$type,$n,$zf_array_count_by_size{$n},sprintf("%4.2f",$zf_array_count_by_size{$n}/$goodSeqs))."\n" if ($verbose_outputs);
 	}
 
@@ -134,6 +149,7 @@ while ( my $obj_seq = $obj_fa->next_seq ) {
   	print OUTDETS "Array Size Estimate: ZF array sizes are OK [".join(",",keys %zf_array_sizes_to_use)."]... \n" if ($verbose_outputs);
     if ($goodSeqs >= $n_seqs_required && !($goodSeqs % 10)){
       for my $sz(keys %zf_array_sizes_to_use){
+		$alignment_output_count++;
         output_fa_from_aln(\$zf_aln{$sz},"$base_name.$sz\ZFs.fa");
       }
     }
@@ -141,13 +157,19 @@ while ( my $obj_seq = $obj_fa->next_seq ) {
   	print OUTDETS "Array Size Estimate: ZF Array size ambiguity ... continuing ... \n" if ($verbose_outputs);
   }
 }
+
 close OUTDETS if ($verbose_outputs);
 close READ2ZFASTAT if ($verbose_outputs);
 
 if ($goodSeqs >= $n_seqs_required && $zf_array_sizes_known){
   for my $sz(keys %zf_array_sizes_to_use){
+	$alignment_output_count++;
     output_fa_from_aln(\$zf_aln{$sz},"$base_name.$sz\ZFs.fa");
   }
+}
+
+if ($alignment_output_count == 0){
+  die("No ZF arrays found in $seq_input_fa\n");
 }
 
 system("rm -rf $tmpdir");
