@@ -3,7 +3,7 @@
 #source         The original source that described this ZF
 #dna_sequence   The DNA sequence of this ZF
 #aa_sequence    The amino acid sequence of this ZF
-dna_contact_aas The amino acids that contact DNA (-1,2,3,6 positions; see https://doi.org/10.1074/jbc.M117.805754)
+#dna_contact_aas The amino acids that contact DNA (-1,2,3,6 positions; see https://doi.org/10.1074/jbc.M117.805754)
 code	old_code	source	dna_sequence	aa_sequence	dna_contact_aas
 !A	NA	This_study	TGTGGGCGGGGCTTTAGCCGGCAGTCTGTCCTCCTCACTCACCAGAGGAGACACACAGGGGAGAAGCCCTATGTCTGCAGGGAG	CGRGFSRQSVLLTHQRRHTGEKPYVCRE	RQVT
 !B	NA	This_study	TGTGGGCGGGGCTTTAGCCGGCAGTCAGTCCTCCTCACTCACCAGAGGAGACACACAGGGGAGAAGCCCTTTGTCTGCAGGGAG	CGRGFSRQSVLLTHQRRHTGEKPFVCRE	RQVT

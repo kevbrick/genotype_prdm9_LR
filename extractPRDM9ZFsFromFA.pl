@@ -93,8 +93,10 @@ my $alignment_output_count = 0;
 ## This loop will find the ZFs in each sequence, check that the flanks are found, and build a
 ## diploid consensus sequence for each. We loop over each sequence in the fasta
 while ( my $obj_seq = $obj_fa->next_seq ) {
+	# Print progress
+	my $pct_done = sprintf("%.1f", ($totSeqs/$seq_count)*100);
+	print STDERR "\rProcessing sequences: $totSeqs/$seq_count ($pct_done%)";
 
-	## Unnecessary precaution, but I'll leave it here.
 	last if ($goodSeqs > $upper_limit);
 
 	$totSeqs++;
@@ -212,20 +214,20 @@ sub is_there_at_least_one_ZF{
 sub get_ZF_array{
 	my ($inSeq,$rname) = @_;
 
-  ## Make tep file names
+  	## Make tep file names
 	my $tmpBase  = $tmpdir."/$rand_name_base";
 	my $outWater = "$tmpBase.water";
-  my $outBlast = "$tmpBase.blast";
+	my $outBlast = "$tmpBase.blast";
 	my $inFasta  = "$tmpBase.input.fa";
 	my $inFastaZ = "$tmpBase.justZFs.fa";
-  my $inFasta2 = "$tmpBase.ZFs.fa";
+	my $inFasta2 = "$tmpBase.ZFs.fa";
 
 	open FA, '>', $inFasta;
 	print FA ">prdm9\n$inSeq";
 	close FA;
 
 	## This simply makes the LHS, RHS and ZF sequences
-  my @ZFFastas = makeFASTAs("$tmpBase");
+	my @ZFFastas = makeFASTAs("$tmpBase");
 
 	##Get the location of the LHS and RHS
 	my ($lSeq,$lScore,$lFrom,$lTo) = get_position_on_read("$tmpBase.LHS.fa",$inFasta);
@@ -234,7 +236,7 @@ sub get_ZF_array{
 	##Skip this array unless we find both the left and right flanking sequences
 	return unless($lTo && $rFrom && ($lTo < $rFrom));
 
-  ## Snip out the likely ZF array and make a fasta file
+	## Snip out the likely ZF array and make a fasta file
 	open FA2, '>', $inFastaZ;
 	print FA2 ">prdm9_zfs\n".substr($inSeq,$lTo-10,($rFrom-$lTo)+10)."\n";
 	close FA2;
@@ -242,25 +244,28 @@ sub get_ZF_array{
 	## Guess number of ZFs
 	my $estimate_ZF_count = round(($rFrom-$lTo)/84);
 
-  my (%zfs,%zfDets);
+	my (%zfs,%zfDets);
 
-  if ($aligner eq 'matcher'){
-    ## Slow & Accurate
+	if ($aligner eq 'matcher'){
+		## Slow & Accurate
 
-    for my $fastaZF(@ZFFastas){
-  	  ## Align ZF sequence to ZF array (allow a max of the expected number of matches)
-      system("matcher -alt $estimate_ZF_count  -gapopen $gap_open_penalty -gapextend $gap_extend_penalty -asequence $fastaZF -bsequence $inFastaZ -outfile $outWater -aformat pair 2>/dev/null");
-      getZFsFromMatcherAlignment($outWater,\%zfs,\%zfDets);
-    }
-  }
+		for my $fastaZF(@ZFFastas){
+			## Align ZF sequence to ZF array (allow a max of the expected number of matches)
+			system("matcher -alt $estimate_ZF_count  -gapopen $gap_open_penalty -gapextend $gap_extend_penalty -asequence $fastaZF -bsequence $inFastaZ -outfile $outWater -aformat pair 2>/dev/null");
+			getZFsFromMatcherAlignment($outWater,\%zfs,\%zfDets);
+		}
+	}
 
-  if ($aligner eq 'blast'){
-    ## FAST & Accurate (10-20x faster)
-    system("makeblastdb -dbtype nucl -in $inFastaZ >/dev/null 2>/dev/null");
-    system("blastn -query $tmpBase.ZFPUB.fa -db $inFastaZ -word_size 7 -max_hsps 200 -num_alignments 20000 -evalue 1 -culling_limit 20000 -outfmt 0 >$outBlast");
+	if ($aligner eq 'blast'){
+		## FAST & Accurate (10-20x faster)
+		print OUTDETS "Creating BLAST database from $inFastaZ...\n" if ($verbose_outputs);
+		system("makeblastdb -dbtype nucl -in $inFastaZ >/dev/null 2>/dev/null");
+		print OUTDETS "Running BLAST search with $tmpBase.ZFPUB.fa against $inFastaZ...\n" if ($verbose_outputs); 
+		system("blastn -query $tmpBase.ZFPUB.fa -db $inFastaZ -word_size 7 -max_hsps 200 -num_alignments 20000 -evalue 1 -culling_limit 20000 -outfmt 0 >$outBlast");
+		print OUTDETS "BLAST search complete. Results written to $outBlast\n" if ($verbose_outputs);
 
-    getZFsFromBlastAlignment($outBlast,\%zfs,\%zfDets);
-  }
+		getZFsFromBlastAlignment($outBlast,\%zfs,\%zfDets);
+	}
 
 	my (@outDetail, %zfOK,%numnum,@ZFnumz,$zfs_found, $zfarray_seq, $num_zfs);
 	my ($kPrev,$previous_zf_end,$previous_zf_num,$contiguous_ZFs,$contiguous_nums) = (0,0,0,"","");
@@ -281,9 +286,9 @@ sub get_ZF_array{
 
 		## Build new hash of ZFs in order
 		unless ($skipZF){
-      if ($zfOK{$nZF} ){
-        my $xx = 1;
-      }
+			if ($zfOK{$nZF} ){
+        		my $xx = 1;
+      		}
 			$zfOK{$nZF}->{seq}     = $zfs{$k}->{seq};
 			$zfOK{$nZF}->{zf}      = $nZF;
 			$zfOK{$nZF}->{zfNoGap} = $zfs_found++;
@@ -297,13 +302,13 @@ sub get_ZF_array{
 			$zfOK{$nZF}->{lOK}     = $lTo?1:0;
 			$zfOK{$nZF}->{rOK}     = $rFrom?1:0;
 
-      $previous_zf_end = $zfOK{$nZF}->{to}+1;
-      $previous_zf_num = $nZF;
-    }
-  }
+			$previous_zf_end = $zfOK{$nZF}->{to}+1;
+			$previous_zf_num = $nZF;
+		}
+	}
 
-  ## Now loop through ZFs in positional order
-  foreach my $nZF (sort { $a <=> $b } keys %zfOK) {
+	## Now loop through ZFs in positional order
+	foreach my $nZF (sort { $a <=> $b } keys %zfOK) {
 		push @ZFnumz, $nZF unless ($numnum{$nZF}++);
 
 		$zfarray_seq .= $zfs{$nZF}->{seq};
